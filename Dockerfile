@@ -1,6 +1,6 @@
-FROM node:20-bullseye-slim
+FROM node:20-bookworm-slim
 
-# Instala ffmpeg, python3 e yt-dlp para extração e mudança de tom no servidor
+# Instala ffmpeg, python3 (3.11+) e yt-dlp para extração e mudança de tom no servidor
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     python3 \
@@ -17,6 +17,7 @@ RUN npm install --omit=dev
 
 COPY . .
 
+ENV PORT=3080
 EXPOSE 3080
 
 CMD ["node", "server.js"]

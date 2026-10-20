@@ -671,6 +671,6 @@ app.delete('/api/repertoire/:id', (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor Tom do Louvor rodando em http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Servidor Tom do Louvor rodando na porta ${PORT}`);
 });
