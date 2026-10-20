@@ -1,0 +1,14 @@
+{
+  "name": "tom-do-louvor",
+  "version": "1.0.0",
+  "description": "Plataforma Web para Ministros de Louvor descobrirem e adaptarem o tom ideal (Masculino/Feminino) de qualquer música",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}
