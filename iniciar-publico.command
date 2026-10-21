@@ -1,5 +1,6 @@
 #!/bin/bash
 cd "$(dirname "$0")"
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"
 echo "==================================================="
 echo "  Iniciando Tom do Louvor (Servidor + Link Público)"
 echo "==================================================="

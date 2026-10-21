@@ -1104,7 +1104,7 @@
               type="text"
               id="songUrlInput"
               class="text-input"
-              placeholder="Cole aqui o link do YouTube da música..."
+              placeholder="Cole o link do YouTube, Spotify ou nome da música..."
               oninput="toggleClearBtn()"
             />
             <button
@@ -1758,7 +1758,14 @@
         statusEl.style.display = 'none';
         updateUI();
       } catch (err) {
-        statusText.textContent = err.message;
+        statusText.innerHTML = `
+          <div style="color: #f87171; font-weight: 500; font-size: 13px; margin-bottom: 8px;">
+            ⚠️ ${err.message}
+          </div>
+          <button type="button" onclick="document.getElementById('loadingStatus').style.display='none'" class="btn btn-secondary btn-sm" style="padding: 4px 12px; font-size: 12px; cursor: pointer;">
+            Tentar outro link
+          </button>
+        `;
       }
     }
 
@@ -1795,7 +1802,14 @@
         statusEl.style.display = 'none';
         updateUI();
       } catch (err) {
-        statusText.textContent = err.message;
+        statusText.innerHTML = `
+          <div style="color: #f87171; font-weight: 500; font-size: 13px; margin-bottom: 8px;">
+            ⚠️ ${err.message}
+          </div>
+          <button type="button" onclick="document.getElementById('loadingStatus').style.display='none'" class="btn btn-secondary btn-sm" style="padding: 4px 12px; font-size: 12px; cursor: pointer;">
+            Tentar outro link
+          </button>
+        `;
       }
     }
 

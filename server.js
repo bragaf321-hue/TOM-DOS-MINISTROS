@@ -1,3 +1,6 @@
+// Garante acesso aos binários yt-dlp e ffmpeg no macOS (Homebrew) e Linux
+process.env.PATH = `/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH || ''}`;
+
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -370,7 +373,176 @@ function normalizeKeyToMajorRoot(rawKey) {
   return PITCH_NAMES[idx];
 }
 
-// Endpoint: Analisar Link (YouTube ou Nome/Link de Música)
+function fetchJsonHttps(url) {
+  return new Promise((resolve) => {
+    https
+      .get(
+        url,
+        {
+          timeout: 5000,
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          }
+        },
+        (res) => {
+          if (res.statusCode < 200 || res.statusCode >= 300) return resolve(null);
+          let data = '';
+          res.on('data', (d) => {
+            if (data.length < 100000) data += d.toString();
+          });
+          res.on('end', () => {
+            try {
+              resolve(JSON.parse(data));
+            } catch {
+              resolve(null);
+            }
+          });
+        }
+      )
+      .on('error', () => resolve(null))
+      .on('timeout', function () {
+        this.destroy();
+        resolve(null);
+      });
+  });
+}
+
+// Normalizador inteligente de URLs e consultas de música
+async function parseMusicMediaInput(rawInput) {
+  const input = rawInput.trim();
+
+  // 1. YouTube (Watch, Short, Share, Embed, Music, Live)
+  const ytRegex =
+    /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts|live)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i;
+  const ytMatch = input.match(ytRegex);
+  if (ytMatch && ytMatch[1]) {
+    const videoId = ytMatch[1];
+    return {
+      type: 'youtube',
+      videoId,
+      cleanUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      searchTarget: `https://www.youtube.com/watch?v=${videoId}`
+    };
+  }
+
+  // 2. Spotify Track URL
+  const spotifyMatch = input.match(/open\.spotify\.com\/(?:intl-[a-z]+\/)?track\/([a-zA-Z0-9]+)/i);
+  if (spotifyMatch) {
+    const cleanSpotifyUrl = input.split('?')[0];
+    const oembed = await fetchJsonHttps(
+      `https://open.spotify.com/oembed?url=${encodeURIComponent(cleanSpotifyUrl)}`
+    );
+    if (oembed && oembed.title) {
+      return {
+        type: 'spotify',
+        title: oembed.title,
+        cleanUrl: cleanSpotifyUrl,
+        searchTarget: `ytsearch1:${oembed.title}`
+      };
+    }
+  }
+
+  // 3. Cifra Club URL
+  const cifraMatch = input.match(/cifraclub\.com\.br\/([^\/]+)\/([^\/]+)/i);
+  if (cifraMatch) {
+    const artistSlug = cifraMatch[1].replace(/-/g, ' ');
+    const songSlug = cifraMatch[2].replace(/-/g, ' ');
+    const query = `${artistSlug} ${songSlug}`.trim();
+    return {
+      type: 'cifraclub',
+      title: `${songSlug} - ${artistSlug}`,
+      cleanUrl: input,
+      searchTarget: `ytsearch1:${query}`
+    };
+  }
+
+  // 4. Texto livre / Nome da música
+  return {
+    type: 'query',
+    title: input,
+    searchTarget: `ytsearch1:${input}`
+  };
+}
+
+// Helper para baixar áudio com yt-dlp usando rotação de player_client para evitar bloqueios
+async function downloadYoutubeAudio(targetUrl, outTemplate, audioFullPath, videoId) {
+  if (fs.existsSync(audioFullPath)) return;
+
+  const runYtDlp = (flags) =>
+    new Promise((resolve, reject) => {
+      execFile('yt-dlp', flags, { timeout: 75000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err) return reject(new Error(stderr || err.message));
+        resolve();
+      });
+    });
+
+  const baseArgs = [
+    '--no-playlist',
+    '--no-warnings',
+    '--no-check-certificates',
+    '--geo-bypass',
+    '-f',
+    'bestaudio/ba/b',
+    '-x',
+    '--audio-format',
+    'mp3',
+    '--audio-quality',
+    '0',
+    '--max-filesize',
+    '65M',
+    '-o',
+    outTemplate
+  ];
+
+  // Tentativa 1: player_client android + web
+  try {
+    await runYtDlp([
+      ...baseArgs,
+      '--extractor-args',
+      'youtube:player_client=android,ios,web;player_skip=configs',
+      targetUrl
+    ]);
+  } catch (err1) {
+    console.warn('Tentativa 1 com yt-dlp falhou, tentando fallback (ios,tv_embedded):', err1.message);
+    // Tentativa 2: player_client ios + tv_embedded
+    try {
+      await runYtDlp([
+        ...baseArgs,
+        '--extractor-args',
+        'youtube:player_client=ios,tv_embedded;player_skip=configs',
+        targetUrl
+      ]);
+    } catch (err2) {
+      console.warn('Tentativa 2 com yt-dlp falhou, tentando sem extractor-args:', err2.message);
+      // Tentativa 3: args padrão
+      await runYtDlp([...baseArgs, targetUrl]);
+    }
+  }
+
+  // Verifica se o arquivo .mp3 existe, ou se foi gerado com outra extensão (.m4a, .webm, .opus)
+  if (!fs.existsSync(audioFullPath)) {
+    const parentDir = path.dirname(audioFullPath);
+    const files = fs.readdirSync(parentDir);
+    const candidate = files.find((f) => f.startsWith(`yt_${videoId}`) && !f.endsWith('.part'));
+    if (candidate) {
+      const candidatePath = path.join(parentDir, candidate);
+      if (candidatePath !== audioFullPath) {
+        // Converte para mp3 via ffmpeg
+        await new Promise((resolve, reject) => {
+          execFile('ffmpeg', ['-y', '-i', candidatePath, '-vn', '-b:a', '160k', audioFullPath], (err) => {
+            if (err) return reject(err);
+            resolve();
+          });
+        });
+      }
+    } else {
+      throw new Error('O áudio não pôde ser salvo no formato MP3.');
+    }
+  }
+}
+
+// Endpoint: Analisar Link (YouTube, Spotify, Cifra Club ou Nome da Música)
 app.post('/api/analyze-url', async (req, res) => {
   try {
     const { url } = req.body;
@@ -378,65 +550,82 @@ app.post('/api/analyze-url', async (req, res) => {
       return res.status(400).json({ error: 'Informe um link do YouTube ou nome da música.' });
     }
 
-    const input = url.trim();
-    const isUrl = /^https?:\/\//i.test(input);
-    const isYouTube = /youtube\.com|youtu\.be/i.test(input);
+    const mediaInfo = await parseMusicMediaInput(url);
+    let title = mediaInfo.title || url.trim();
+    let uploader = '';
+    let thumbnail = '';
+    let duration = 0;
+    let videoId = mediaInfo.videoId || null;
+    let webpageUrl = mediaInfo.cleanUrl || null;
 
-    // Search target for yt-dlp: either direct YouTube URL or ytsearch1:query
-    const ytTarget = isYouTube ? input : `ytsearch1:${input}`;
-
-    // Step 1: Get metadata via yt-dlp
-    const metaJson = await new Promise((resolve, reject) => {
-      execFile(
-        'yt-dlp',
-        ['--dump-json', '--no-playlist', '--no-warnings', ytTarget],
-        { timeout: 25000, maxBuffer: 10 * 1024 * 1024 },
-        (err, stdout) => {
-          if (err) return reject(err);
-          try {
-            const firstLine = stdout.trim().split('\n')[0];
-            resolve(JSON.parse(firstLine));
-          } catch (e) {
-            reject(e);
-          }
-        }
+    // Se for link direto do YouTube, consulta o oEmbed oficial primeiro (ultra rápido e imune a bloqueios)
+    if (mediaInfo.type === 'youtube') {
+      const oembed = await fetchJsonHttps(
+        `https://www.youtube.com/oembed?url=${encodeURIComponent(mediaInfo.cleanUrl)}&format=json`
       );
-    });
+      if (oembed) {
+        title = oembed.title || title;
+        uploader = oembed.author_name || '';
+        thumbnail = oembed.thumbnail_url || `https://i.ytimg.com/vi/${mediaInfo.videoId}/hqdefault.jpg`;
+      }
+    }
 
-    const videoId = metaJson.id || `vid_${Date.now()}`;
-    const title = metaJson.title || input;
-    const uploader = metaJson.uploader || metaJson.channel || '';
-    const thumbnail = metaJson.thumbnail || '';
-    const duration = metaJson.duration || 0;
+    // Se ainda não temos metadados detalhados, consulta o yt-dlp
+    if (!uploader || !videoId) {
+      try {
+        const metaJson = await new Promise((resolve, reject) => {
+          execFile(
+            'yt-dlp',
+            [
+              '--dump-json',
+              '--no-playlist',
+              '--no-warnings',
+              '--no-check-certificates',
+              '--extractor-args',
+              'youtube:player_client=android,ios,web;player_skip=configs',
+              mediaInfo.searchTarget
+            ],
+            { timeout: 20000, maxBuffer: 10 * 1024 * 1024 },
+            (err, stdout) => {
+              if (err) return reject(err);
+              try {
+                const firstLine = stdout.trim().split('\n')[0];
+                resolve(JSON.parse(firstLine));
+              } catch (e) {
+                reject(e);
+              }
+            }
+          );
+        });
 
-    // Step 2: Check if audio is already cached, otherwise download via yt-dlp as MP3
+        videoId = metaJson.id || videoId || `vid_${Date.now()}`;
+        title = metaJson.title || title;
+        uploader = metaJson.uploader || metaJson.channel || uploader;
+        thumbnail = metaJson.thumbnail || thumbnail;
+        duration = metaJson.duration || 0;
+        webpageUrl = metaJson.webpage_url || (videoId ? `https://www.youtube.com/watch?v=${videoId}` : null);
+      } catch (metaErr) {
+        console.warn('yt-dlp dump-json avisou:', metaErr.message);
+        if (!videoId) {
+          videoId = `vid_${Date.now()}`;
+        }
+      }
+    }
+
+    if (!videoId) {
+      videoId = `vid_${Date.now()}`;
+    }
+
+    const downloadTarget = webpageUrl || mediaInfo.searchTarget;
     const audioFilename = `yt_${videoId}.mp3`;
     const audioFullPath = path.join(cacheDir, audioFilename);
     const outTemplate = path.join(cacheDir, `yt_${videoId}.%(ext)s`);
 
-    if (!fs.existsSync(audioFullPath)) {
-      await new Promise((resolve, reject) => {
-        execFile(
-          'yt-dlp',
-          [
-            '-f', 'ba/b',
-            '-x',
-            '--audio-format', 'mp3',
-            '--no-playlist',
-            '-o', outTemplate,
-            metaJson.webpage_url || ytTarget
-          ],
-          { timeout: 60000 },
-          (err) => {
-            if (err) return reject(err);
-            resolve();
-          }
-        );
-      });
-    }
+    // Download do áudio com tolerância a falhas
+    await downloadYoutubeAudio(downloadTarget, outTemplate, audioFullPath, videoId);
 
-    // Step 3: Detect original artist gender and musical key
-    const combinedText = `${title} ${uploader} ${input}`;
+    // Detecção de gênero do cantor(a) e tom musical
+    const combinedText = `${title} ${uploader} ${url}`;
     let detectedGender = detectGenderFromText(combinedText) || 'male';
 
     const webLookup = await lookupKeyFromWeb(`${title} ${uploader}`);
@@ -455,8 +644,8 @@ app.post('/api/analyze-url', async (req, res) => {
     return res.json({
       id: videoId,
       title,
-      artist: uploader,
-      thumbnail,
+      artist: uploader || 'YouTube',
+      thumbnail: thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : ''),
       duration,
       audioUrl: `/uploads/cache/${audioFilename}`,
       audioFile: audioFilename,
@@ -467,7 +656,8 @@ app.post('/api/analyze-url', async (req, res) => {
   } catch (err) {
     console.error('Erro ao analisar link:', err);
     return res.status(500).json({
-      error: 'Não foi possível extrair o áudio desse link automaticamente. Verifique o link ou envie o arquivo MP3.',
+      error:
+        'Não foi possível extrair o áudio desse link automaticamente. Dica: você pode tentar colar o nome da música (ex: "Bondade de Deus Isaias Saad") ou enviar o arquivo MP3 diretamente.',
       details: err.message
     });
   }
