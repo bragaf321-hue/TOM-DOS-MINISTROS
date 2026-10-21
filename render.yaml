@@ -3,6 +3,7 @@ services:
     name: tom-do-louvor
     runtime: docker
     plan: free
+    branch: main
     autoDeploy: true
     envVars:
       - key: PORT

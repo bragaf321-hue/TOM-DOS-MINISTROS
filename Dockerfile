@@ -1,13 +1,13 @@
 FROM node:20-bookworm-slim
 
-# Instala ffmpeg, python3 (3.11+) e yt-dlp para extração e mudança de tom no servidor
+# Instala ffmpeg, python3, pip e yt-dlp completo com dependências de descriptografia e JS
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     python3 \
+    python3-pip \
     ca-certificates \
     curl \
-  && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-  && chmod a+rx /usr/local/bin/yt-dlp \
+  && pip3 install --no-cache-dir --break-system-packages -U "yt-dlp[default]" \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -408,6 +408,40 @@ function fetchJsonHttps(url) {
   });
 }
 
+function searchYouTubeVideoId(query) {
+  return new Promise((resolve) => {
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+    https
+      .get(
+        searchUrl,
+        {
+          timeout: 7000,
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+          }
+        },
+        (res) => {
+          let html = '';
+          res.on('data', (d) => {
+            if (html.length < 350000) html += d.toString();
+          });
+          res.on('end', () => {
+            const m = html.match(/watch\?v=([a-zA-Z0-9_-]{11})/);
+            if (m && m[1]) resolve(m[1]);
+            else resolve(null);
+          });
+        }
+      )
+      .on('error', () => resolve(null))
+      .on('timeout', function () {
+        this.destroy();
+        resolve(null);
+      });
+  });
+}
+
 // Normalizador inteligente de URLs e consultas de música
 async function parseMusicMediaInput(rawInput) {
   const input = rawInput.trim();
@@ -475,13 +509,13 @@ async function parseMusicMediaInput(rawInput) {
   };
 }
 
-// Helper para baixar áudio com yt-dlp usando rotação de player_client para evitar bloqueios
+// Helper para baixar áudio com yt-dlp usando cliente android sem exigir login
 async function downloadYoutubeAudio(targetUrl, outTemplate, audioFullPath, videoId) {
   if (fs.existsSync(audioFullPath)) return;
 
   const runYtDlp = (flags) =>
     new Promise((resolve, reject) => {
-      execFile('yt-dlp', flags, { timeout: 75000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile('yt-dlp', flags, { timeout: 60000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) return reject(new Error(stderr || err.message));
         resolve();
       });
@@ -505,26 +539,26 @@ async function downloadYoutubeAudio(targetUrl, outTemplate, audioFullPath, video
     outTemplate
   ];
 
-  // Tentativa 1: player_client android + web
+  // Tentativa 1: player_client android puro (não exige login de bot)
   try {
     await runYtDlp([
       ...baseArgs,
       '--extractor-args',
-      'youtube:player_client=android,ios,web;player_skip=configs',
+      'youtube:player_client=android;player_skip=configs',
       targetUrl
     ]);
   } catch (err1) {
-    console.warn('Tentativa 1 com yt-dlp falhou, tentando fallback (ios,tv_embedded):', err1.message);
-    // Tentativa 2: player_client ios + tv_embedded
+    console.warn('Tentativa 1 com yt-dlp falhou, tentando fallback (ios):', err1.message);
+    // Tentativa 2: player_client ios
     try {
       await runYtDlp([
         ...baseArgs,
         '--extractor-args',
-        'youtube:player_client=ios,tv_embedded;player_skip=configs',
+        'youtube:player_client=ios;player_skip=configs',
         targetUrl
       ]);
     } catch (err2) {
-      console.warn('Tentativa 2 com yt-dlp falhou, tentando sem extractor-args:', err2.message);
+      console.warn('Tentativa 2 com yt-dlp falhou, tentando padrão:', err2.message);
       // Tentativa 3: args padrão
       await runYtDlp([...baseArgs, targetUrl]);
     }
@@ -568,57 +602,24 @@ app.post('/api/analyze-url', async (req, res) => {
     let videoId = mediaInfo.videoId || null;
     let webpageUrl = mediaInfo.cleanUrl || null;
 
-    // Se for link direto do YouTube, consulta o oEmbed oficial primeiro (ultra rápido e imune a bloqueios)
-    if (mediaInfo.type === 'youtube') {
+    // Se for texto de busca ou Spotify/CifraClub sem videoId direto, busca o ID do vídeo via HTTP sem risco de bloqueio
+    if (!videoId) {
+      const searchQuery = mediaInfo.title || url.trim();
+      videoId = await searchYouTubeVideoId(searchQuery);
+      if (videoId) {
+        webpageUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      }
+    }
+
+    // Se temos um videoId do YouTube, consulta o oEmbed oficial para metadados instantâneos
+    if (videoId) {
       const oembed = await fetchJsonHttps(
-        `https://www.youtube.com/oembed?url=${encodeURIComponent(mediaInfo.cleanUrl)}&format=json`
+        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
       );
       if (oembed) {
         title = oembed.title || title;
         uploader = oembed.author_name || '';
-        thumbnail = oembed.thumbnail_url || `https://i.ytimg.com/vi/${mediaInfo.videoId}/hqdefault.jpg`;
-      }
-    }
-
-    // Se ainda não temos metadados detalhados, consulta o yt-dlp
-    if (!uploader || !videoId) {
-      try {
-        const metaJson = await new Promise((resolve, reject) => {
-          execFile(
-            'yt-dlp',
-            [
-              '--dump-json',
-              '--no-playlist',
-              '--no-warnings',
-              '--no-check-certificates',
-              '--extractor-args',
-              'youtube:player_client=android,ios,web;player_skip=configs',
-              mediaInfo.searchTarget
-            ],
-            { timeout: 20000, maxBuffer: 10 * 1024 * 1024 },
-            (err, stdout) => {
-              if (err) return reject(err);
-              try {
-                const firstLine = stdout.trim().split('\n')[0];
-                resolve(JSON.parse(firstLine));
-              } catch (e) {
-                reject(e);
-              }
-            }
-          );
-        });
-
-        videoId = metaJson.id || videoId || `vid_${Date.now()}`;
-        title = metaJson.title || title;
-        uploader = metaJson.uploader || metaJson.channel || uploader;
-        thumbnail = metaJson.thumbnail || thumbnail;
-        duration = metaJson.duration || 0;
-        webpageUrl = metaJson.webpage_url || (videoId ? `https://www.youtube.com/watch?v=${videoId}` : null);
-      } catch (metaErr) {
-        console.warn('yt-dlp dump-json avisou:', metaErr.message);
-        if (!videoId) {
-          videoId = `vid_${Date.now()}`;
-        }
+        thumbnail = oembed.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
       }
     }
 
@@ -626,13 +627,19 @@ app.post('/api/analyze-url', async (req, res) => {
       videoId = `vid_${Date.now()}`;
     }
 
-    const downloadTarget = webpageUrl || mediaInfo.searchTarget;
+    const downloadTarget = webpageUrl || (videoId.length === 11 ? `https://www.youtube.com/watch?v=${videoId}` : `ytsearch1:${title}`);
     const audioFilename = `yt_${videoId}.mp3`;
     const audioFullPath = path.join(cacheDir, audioFilename);
     const outTemplate = path.join(cacheDir, `yt_${videoId}.%(ext)s`);
 
-    // Download do áudio com tolerância a falhas
-    await downloadYoutubeAudio(downloadTarget, outTemplate, audioFullPath, videoId);
+    // Download do áudio com tolerância a restrições de nuvem
+    let audioAvailable = false;
+    try {
+      await downloadYoutubeAudio(downloadTarget, outTemplate, audioFullPath, videoId);
+      audioAvailable = fs.existsSync(audioFullPath);
+    } catch (dlErr) {
+      console.warn('Download de áudio não disponível nesta hospedagem:', dlErr.message);
+    }
 
     // Detecção de gênero do cantor(a) e tom musical
     const combinedText = `${title} ${uploader} ${url}`;
@@ -640,34 +647,39 @@ app.post('/api/analyze-url', async (req, res) => {
 
     const webLookup = await lookupKeyFromWeb(`${title} ${uploader}`);
     let detectedKey = 'G';
-    let keySource = 'Análise de Áudio IA';
+    let keySource = 'Catálogo Louvor';
 
     if (webLookup && webLookup.key) {
       detectedKey = webLookup.key;
       keySource = webLookup.source || 'Cifra Club';
       if (webLookup.gender) detectedGender = webLookup.gender;
-    } else {
+    } else if (audioAvailable) {
       const audioAnalysis = await analyzeAudioKeyAndPitch(audioFullPath);
       detectedKey = audioAnalysis.key || 'G';
+      keySource = 'Análise de Áudio IA';
+    } else {
+      detectedKey = 'G';
+      keySource = 'Tom Sugerido';
     }
 
     return res.json({
       id: videoId,
       title,
       artist: uploader || 'YouTube',
-      thumbnail: thumbnail || (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : ''),
+      thumbnail: thumbnail || (videoId && videoId.length === 11 ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : ''),
       duration,
-      audioUrl: `/uploads/cache/${audioFilename}`,
-      audioFile: audioFilename,
+      audioUrl: audioAvailable ? `/uploads/cache/${audioFilename}` : null,
+      audioFile: audioAvailable ? audioFilename : null,
       originalKey: detectedKey,
       originalGender: detectedGender,
-      keySource
+      keySource,
+      audioAvailable
     });
   } catch (err) {
     console.error('Erro ao analisar link:', err);
     return res.status(500).json({
       error:
-        'Não foi possível extrair o áudio desse link automaticamente. Dica: você pode tentar colar o nome da música (ex: "Bondade de Deus Isaias Saad") ou enviar o arquivo MP3 diretamente.',
+        'Não foi possível ler este link. Dica: você pode colar o link do YouTube, Spotify ou simplesmente digitar o nome da música (ex: "Bondade de Deus Isaias Saad").',
       details: err.message
     });
   }

@@ -1773,6 +1773,15 @@
         document.getElementById('currentSongSub').textContent =
           `Cantor(a): ${state.artist} • Tom original (${data.keySource}): ${state.originalKey}`;
 
+        const statusLabel = document.getElementById('audioStatusLabel');
+        if (!data.audioFile && statusLabel) {
+          statusLabel.innerHTML = `
+            <div style="font-size:11px; color:#facc15; padding:6px 10px; background:rgba(250,204,21,0.08); border-radius:8px; border:1px solid rgba(250,204,21,0.2); margin-top:6px;">
+              💡 <strong>Tom e acordes transpostos prontos!</strong> O áudio do YouTube está protegido nesta nuvem. Você pode ensaiar com os tons abaixo e tocar com o <strong>Pad Sonoro</strong>, ou enviar o arquivo MP3 da canção no botão acima.
+            </div>
+          `;
+        }
+
         statusEl.style.display = 'none';
         updateUI();
       } catch (err) {
