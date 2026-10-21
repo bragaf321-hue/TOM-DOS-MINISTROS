@@ -1733,6 +1733,24 @@
 
       const statusEl = document.getElementById('loadingStatus');
       const statusText = document.getElementById('loadingStatusText');
+
+      // Alerta imediato se o link do YouTube estiver cortado
+      if (/youtu\.be\/|youtube\.com\//i.test(urlInput)) {
+        const idMatch = urlInput.match(/(?:v=|youtu\.be\/|shorts\/|live\/)([^&?/\s]+)/i);
+        if (idMatch && idMatch[1] && idMatch[1].length < 11) {
+          statusEl.style.display = 'flex';
+          statusText.innerHTML = `
+            <div style="color: #f87171; font-weight: 500; font-size: 13px; margin-bottom: 8px;">
+              ⚠️ O link do YouTube está cortado ("${idMatch[1]}", faltando caracteres). Copie o link completo ou digite o nome da música (ex: "Bondade de Deus").
+            </div>
+            <button type="button" onclick="document.getElementById('loadingStatus').style.display='none'" class="btn btn-secondary btn-sm" style="padding: 4px 12px; font-size: 12px; cursor: pointer;">
+              Entendi
+            </button>
+          `;
+          return;
+        }
+      }
+
       statusEl.style.display = 'flex';
       statusText.textContent = 'Extraindo áudio e identificando tom original...';
 

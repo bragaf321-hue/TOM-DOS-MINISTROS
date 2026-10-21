@@ -426,6 +426,16 @@ async function parseMusicMediaInput(rawInput) {
     };
   }
 
+  // Verifica se o usuário colou um link do YouTube que foi cortado acidentalmente
+  if (/youtu\.be\/|youtube\.com\//i.test(input)) {
+    const partialMatch = input.match(/(?:v=|youtu\.be\/|shorts\/|live\/)([^&?/\s]+)/i);
+    if (partialMatch && partialMatch[1] && partialMatch[1].length < 11) {
+      throw new Error(
+        `O link do YouTube colado parece incompleto ou cortado ("${partialMatch[1]}"). Verifique se copiou o link inteiro ou digite o nome da música diretamente.`
+      );
+    }
+  }
+
   // 2. Spotify Track URL
   const spotifyMatch = input.match(/open\.spotify\.com\/(?:intl-[a-z]+\/)?track\/([a-zA-Z0-9]+)/i);
   if (spotifyMatch) {
