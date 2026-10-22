@@ -1780,7 +1780,12 @@
               💡 <strong>Tom e acordes transpostos prontos!</strong> O áudio do YouTube está protegido nesta nuvem. Você pode ensaiar com os tons abaixo e tocar com o <strong>Pad Sonoro</strong>, ou enviar o arquivo MP3 da canção no botão acima.
             </div>
           `;
+        } else if (statusLabel) {
+          statusLabel.innerHTML = '';
         }
+
+        const trackLabel = document.getElementById('playerTrackLabel');
+        if (trackLabel) trackLabel.textContent = `${state.title}`;
 
         statusEl.style.display = 'none';
         updateUI();

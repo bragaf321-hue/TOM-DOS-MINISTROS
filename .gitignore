@@ -1,4 +1,5 @@
 node_modules
 uploads/cache/*
+!uploads/cache/yt_0I_3CCL6Q5U.mp3
 uploads/shifted/*
 .DS_Store

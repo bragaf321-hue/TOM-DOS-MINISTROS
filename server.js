@@ -509,13 +509,13 @@ async function parseMusicMediaInput(rawInput) {
   };
 }
 
-// Helper para baixar áudio com yt-dlp usando cliente android sem exigir login
+// Helper para baixar áudio com yt-dlp usando cliente android/visionos sem exigir login
 async function downloadYoutubeAudio(targetUrl, outTemplate, audioFullPath, videoId) {
   if (fs.existsSync(audioFullPath)) return;
 
   const runYtDlp = (flags) =>
     new Promise((resolve, reject) => {
-      execFile('yt-dlp', flags, { timeout: 60000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile('yt-dlp', flags, { timeout: 75000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) return reject(new Error(stderr || err.message));
         resolve();
       });
@@ -527,7 +527,7 @@ async function downloadYoutubeAudio(targetUrl, outTemplate, audioFullPath, video
     '--no-check-certificates',
     '--geo-bypass',
     '-f',
-    'bestaudio/ba/b',
+    'ba/b/best',
     '-x',
     '--audio-format',
     'mp3',
@@ -535,32 +535,54 @@ async function downloadYoutubeAudio(targetUrl, outTemplate, audioFullPath, video
     '0',
     '--max-filesize',
     '65M',
+    '--socket-timeout',
+    '30',
     '-o',
     outTemplate
   ];
 
-  // Tentativa 1: player_client android puro (não exige login de bot)
+  // Tentativa 1: player_client visionos,android (combinação moderna que não exige login)
   try {
     await runYtDlp([
       ...baseArgs,
       '--extractor-args',
-      'youtube:player_client=android;player_skip=configs',
+      'youtube:player_client=visionos,android',
       targetUrl
     ]);
   } catch (err1) {
-    console.warn('Tentativa 1 com yt-dlp falhou, tentando fallback (ios):', err1.message);
-    // Tentativa 2: player_client ios
+    console.warn('Tentativa 1 com yt-dlp falhou, tentando fallback (android puro):', err1.message);
+    // Tentativa 2: player_client android
     try {
       await runYtDlp([
         ...baseArgs,
         '--extractor-args',
-        'youtube:player_client=ios;player_skip=configs',
+        'youtube:player_client=android',
         targetUrl
       ]);
     } catch (err2) {
-      console.warn('Tentativa 2 com yt-dlp falhou, tentando padrão:', err2.message);
-      // Tentativa 3: args padrão
-      await runYtDlp([...baseArgs, targetUrl]);
+      console.warn('Tentativa 2 com yt-dlp falhou, tentando fallback (visionos puro):', err2.message);
+      // Tentativa 3: player_client visionos
+      try {
+        await runYtDlp([
+          ...baseArgs,
+          '--extractor-args',
+          'youtube:player_client=visionos',
+          targetUrl
+        ]);
+      } catch (err3) {
+        console.warn('Tentativa 3 com yt-dlp falhou, tentando fallback (mweb,tv):', err3.message);
+        try {
+          await runYtDlp([
+            ...baseArgs,
+            '--extractor-args',
+            'youtube:player_client=mweb,tv',
+            targetUrl
+          ]);
+        } catch (err4) {
+          console.warn('Tentativa 4 falhou, tentando padrão:', err4.message);
+          await runYtDlp([...baseArgs, targetUrl]);
+        }
+      }
     }
   }
 
@@ -735,7 +757,20 @@ app.get('/api/audio-shifted', async (req, res) => {
     const safeFile = path.basename(file);
     const inputPath = path.join(cacheDir, safeFile);
     if (!fs.existsSync(inputPath)) {
-      return res.status(404).send('Arquivo de áudio original não encontrado');
+      // Se for um arquivo do YouTube (yt_VIDEOID.mp3), tenta baixar sob demanda
+      const ytMatch = safeFile.match(/^yt_([a-zA-Z0-9_-]{11})\.mp3$/);
+      if (ytMatch && ytMatch[1]) {
+        try {
+          const videoId = ytMatch[1];
+          const outTemplate = path.join(cacheDir, `yt_${videoId}.%(ext)s`);
+          await downloadYoutubeAudio(`https://www.youtube.com/watch?v=${videoId}`, outTemplate, inputPath, videoId);
+        } catch (e) {
+          console.error('Falha ao baixar sob demanda no audio-shifted:', e.message);
+        }
+      }
+      if (!fs.existsSync(inputPath)) {
+        return res.status(404).send('Arquivo de áudio original não encontrado');
+      }
     }
 
     const st = parseFloat(semitones) || 0;
